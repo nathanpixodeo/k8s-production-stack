@@ -20,8 +20,9 @@ The stack provisions the following Kubernetes layers:
 | **Cluster** | EKS / Kubeadm | VPC, multi-AZ node groups, OIDC + IRSA |
 | **Networking** | Ingress-NGINX, cert-manager, CoreDNS | TLS termination, auto certificate renewal |
 | **Storage** | CSI Drivers, StorageClass | gp3 encrypted volumes, dynamic provisioning, snapshots |
-| **Data** | MySQL StatefulSet, Redis | HA database, persistent PVC, tuned config |
+| **Data** | MySQL / MariaDB / PostgreSQL | Swappable engines via kustomize, 3-replica StatefulSet |
 | **Application** | Deployments, Services, Ingresses, HPAs | Resource limits, probes, anti-affinity, auto-scaling |
+| **Framework** | Laravel (PHP-FPM + Nginx + Horizon) | Queue workers, scheduler, framework-optimised config |
 | **Security** | Network Policies, RBAC, Sealed Secrets | Default-deny, least privilege, encrypted secrets in git |
 | **Monitoring** | Prometheus, Grafana, Loki, AlertManager | Metrics, logs, alerts (Slack/PagerDuty) |
 | **Backup** | Velero | Daily/monthly PV + resource backups to S3 |
@@ -39,14 +40,20 @@ k8s-production-stack/
 │   └── cert-manager/          # cert-manager Helm values
 ├── storage/                   # CSI + StorageClass
 │   └── storage-class.yaml     # gp3 default, retain, EFS
-├── database/                  # Stateful workloads
-│   └── mysql/                 # MySQL StatefulSet, Services, ConfigMap
-├── application/               # App manifests
+├── database/                  # Swappable database engines
+│   ├── mysql/                 # MySQL 8.4 StatefulSet (default)
+│   ├── mariadb/               # MariaDB 11.4 StatefulSet
+│   ├── postgresql/            # PostgreSQL 16 StatefulSet
+│   └── README.md              # How to switch engines
+├── application/               # Generic app manifests
 │   ├── deployment.yaml        # Production-grade Deployment config
 │   ├── service.yaml           # ClusterIP service
 │   ├── ingress.yaml           # TLS ingress with cert-manager
 │   ├── hpa.yaml               # CPU + memory autoscaling
 │   └── pdb.yaml               # Pod Disruption Budget
+├── frameworks/                # Framework-specific overlays
+│   ├── laravel/               # Laravel: PHP-FPM + Nginx + Horizon + Scheduler
+│   └── README.md              # Framework usage docs
 ├── security/                  # Security controls
 │   ├── network-policies.yaml  # Default-deny + selective allow
 │   ├── rbac.yaml              # ServiceAccount, Role, RoleBinding
@@ -103,11 +110,12 @@ kubectl apply -k monitoring/
 # 6. Install Security (NetworkPolicies, RBAC, Sealed Secrets)
 kubectl apply -k security/
 
-# 7. Install Database (MySQL)
-kubectl apply -k database/
+# 7. Install Database (choose engine by editing database/kustomization.yaml)
+kubectl apply -k database/     # default: MySQL
 
-# 8. Deploy Application
-kubectl apply -k application/
+# 8. Deploy Application (choose one):
+kubectl apply -k application/                      # generic app
+kubectl apply -k frameworks/laravel/               # Laravel (PHP-FPM + Nginx + Horizon)
 
 # 9. Install Backup (Velero)
 kubectl apply -k backup/

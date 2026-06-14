@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: laravel-horizon
+  namespace: myapp
+  labels:
+    app: laravel-horizon
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: laravel-horizon
+  template:
+    metadata:
+      labels:
+        app: laravel-horizon
+    spec:
+      serviceAccountName: myapp-sa
+      containers:
+      - name: horizon
+        image: myapp-laravel:latest
+        imagePullPolicy: Always
+        command:
+        - php
+        - /var/www/html/artisan
+        - horizon
+        envFrom:
+        - configMapRef:
+            name: laravel-env
+        - secretRef:
+            name: laravel-secrets
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: 1
+            memory: 512Mi
+        livenessProbe:
+          exec:
+            command:
+            - php
+            - /var/www/html/artisan
+            - horizon:status
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+      terminationGracePeriodSeconds: 30

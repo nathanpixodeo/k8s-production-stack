@@ -1,20 +1,20 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: mysql
+  name: mariadb
   namespace: myapp
   labels:
-    app: mysql
+    app: mariadb
 spec:
   serviceName: database-headless
   replicas: 3
   selector:
     matchLabels:
-      app: mysql
+      app: mariadb
   template:
     metadata:
       labels:
-        app: mysql
+        app: mariadb
     spec:
       topologySpreadConstraints:
       - maxSkew: 1
@@ -22,25 +22,29 @@ spec:
         whenUnsatisfiable: ScheduleAnyway
         labelSelector:
           matchLabels:
-            app: mysql
+            app: mariadb
       containers:
-      - name: mysql
-        image: mysql:8.4
+      - name: mariadb
+        image: mariadb:11.4
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 3306
           name: mysql
         env:
-        - name: MYSQL_ROOT_PASSWORD
+        - name: MARIADB_ROOT_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: mysql-secret
+              name: mariadb-secret
               key: ROOT_PASSWORD
-        - name: MYSQL_PASSWORD
+        - name: MARIADB_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: mysql-secret
+              name: mariadb-secret
               key: USER_PASSWORD
+        - name: MARIADB_USER
+          value: myapp
+        - name: MARIADB_DATABASE
+          value: myapp
         resources:
           requests:
             cpu: 500m
@@ -54,7 +58,7 @@ spec:
             - mysqladmin
             - ping
             - -u root
-            - -p$(MYSQL_ROOT_PASSWORD)
+            - -p$(MARIADB_ROOT_PASSWORD)
           initialDelaySeconds: 60
           periodSeconds: 10
         readinessProbe:
@@ -62,7 +66,7 @@ spec:
             command:
             - mysql
             - -u root
-            - -p$(MYSQL_ROOT_PASSWORD)
+            - -p$(MARIADB_ROOT_PASSWORD)
             - -e
             - SELECT 1
           initialDelaySeconds: 30
@@ -72,15 +76,10 @@ spec:
           mountPath: /var/lib/mysql
         - name: config
           mountPath: /etc/mysql/conf.d
-        - name: initdb
-          mountPath: /docker-entrypoint-initdb.d
       volumes:
       - name: config
         configMap:
-          name: mysql-config
-      - name: initdb
-        configMap:
-          name: mysql-initdb
+          name: mariadb-config
       securityContext:
         fsGroup: 999
         runAsUser: 999

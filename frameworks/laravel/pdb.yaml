@@ -1,0 +1,12 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: laravel-pdb
+  namespace: myapp
+  labels:
+    app: laravel
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: laravel

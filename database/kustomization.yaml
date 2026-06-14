@@ -1,5 +1,23 @@
+# Database Layer - Database Engine Selection
+#
+# Choose your database engine by uncommenting the desired option below.
+# All engines expose the same Service names:
+#   - database-svc (primary read/write)
+#   - database-svc-read (replica read-only)
+#
+# Usage:
+#   kubectl apply -k database/
+#
+# Supported engines:
+#   - mysql       : MySQL 8.4 (StatefulSet, 3 replicas, 10Gi gp3)
+#   - mariadb     : MariaDB 11.4 (StatefulSet, 3 replicas, 10Gi gp3)
+#   - postgresql  : PostgreSQL 16 (StatefulSet, 3 replicas, 10Gi gp3)
+
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# Uncomment ONE of the following:
 resources:
   - mysql
+#  - mariadb
+#  - postgresql

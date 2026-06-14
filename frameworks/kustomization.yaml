@@ -1,0 +1,11 @@
+# Framework Overlays
+#
+# This directory contains framework-specific deployment overlays.
+# Each overlay extends the base application resources with framework-specific
+# configurations such as PHP-FPM, Nginx, queue workers, schedulers, etc.
+#
+# Usage:
+#   kubectl apply -k frameworks/laravel/
+#
+# Available frameworks:
+#   - laravel  : PHP-FPM + Nginx + Horizon + Scheduler

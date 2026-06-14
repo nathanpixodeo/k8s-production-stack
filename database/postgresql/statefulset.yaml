@@ -1,20 +1,20 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: mysql
+  name: postgresql
   namespace: myapp
   labels:
-    app: mysql
+    app: postgresql
 spec:
   serviceName: database-headless
   replicas: 3
   selector:
     matchLabels:
-      app: mysql
+      app: postgresql
   template:
     metadata:
       labels:
-        app: mysql
+        app: postgresql
     spec:
       topologySpreadConstraints:
       - maxSkew: 1
@@ -22,25 +22,24 @@ spec:
         whenUnsatisfiable: ScheduleAnyway
         labelSelector:
           matchLabels:
-            app: mysql
+            app: postgresql
       containers:
-      - name: mysql
-        image: mysql:8.4
+      - name: postgresql
+        image: postgres:16
         imagePullPolicy: IfNotPresent
         ports:
-        - containerPort: 3306
-          name: mysql
+        - containerPort: 5432
+          name: postgresql
         env:
-        - name: MYSQL_ROOT_PASSWORD
+        - name: POSTGRES_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: mysql-secret
-              key: ROOT_PASSWORD
-        - name: MYSQL_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: mysql-secret
+              name: postgresql-secret
               key: USER_PASSWORD
+        - name: POSTGRES_USER
+          value: myapp
+        - name: POSTGRES_DB
+          value: myapp
         resources:
           requests:
             cpu: 500m
@@ -51,36 +50,29 @@ spec:
         livenessProbe:
           exec:
             command:
-            - mysqladmin
-            - ping
-            - -u root
-            - -p$(MYSQL_ROOT_PASSWORD)
+            - pg_isready
+            - -U myapp
+            - -d myapp
           initialDelaySeconds: 60
           periodSeconds: 10
         readinessProbe:
           exec:
             command:
-            - mysql
-            - -u root
-            - -p$(MYSQL_ROOT_PASSWORD)
-            - -e
-            - SELECT 1
+            - pg_isready
+            - -U myapp
+            - -d myapp
           initialDelaySeconds: 30
           periodSeconds: 5
         volumeMounts:
         - name: data
-          mountPath: /var/lib/mysql
+          mountPath: /var/lib/postgresql/data
         - name: config
-          mountPath: /etc/mysql/conf.d
-        - name: initdb
-          mountPath: /docker-entrypoint-initdb.d
+          mountPath: /etc/postgresql.conf
+          subPath: postgresql.conf
       volumes:
       - name: config
         configMap:
-          name: mysql-config
-      - name: initdb
-        configMap:
-          name: mysql-initdb
+          name: postgresql-config
       securityContext:
         fsGroup: 999
         runAsUser: 999

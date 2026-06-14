@@ -4,15 +4,15 @@ metadata:
   name: database-svc
   namespace: myapp
   labels:
-    app: mysql
+    app: postgresql
 spec:
   type: ClusterIP
   ports:
-  - name: mysql
-    port: 3306
-    targetPort: 3306
+  - name: postgresql
+    port: 5432
+    targetPort: 5432
   selector:
-    app: mysql
+    app: postgresql
     role: primary
 ---
 apiVersion: v1
@@ -21,15 +21,15 @@ metadata:
   name: database-svc-read
   namespace: myapp
   labels:
-    app: mysql
+    app: postgresql
 spec:
   type: ClusterIP
   ports:
-  - name: mysql
-    port: 3306
-    targetPort: 3306
+  - name: postgresql
+    port: 5432
+    targetPort: 5432
   selector:
-    app: mysql
+    app: postgresql
     role: replica
 ---
 apiVersion: v1
@@ -38,13 +38,13 @@ metadata:
   name: database-headless
   namespace: myapp
   labels:
-    app: mysql
+    app: postgresql
 spec:
   type: ClusterIP
   clusterIP: None
   ports:
-  - name: mysql
-    port: 3306
-    targetPort: 3306
+  - name: postgresql
+    port: 5432
+    targetPort: 5432
   selector:
-    app: mysql
+    app: postgresql
