@@ -1,184 +1,199 @@
-# Kiến trúc tổng quan
+# Kiến trúc tổng quan (Dành cho người mới bắt đầu)
 
-## Mục tiêu
+Tài liệu này giải thích kiến trúc của dự án bằng ngôn ngữ đơn giản. Nếu bạn chưa từng dùng Kubernetes, hãy bắt đầu ở đây.
 
-Triển khai ứng dụng production-grade lên Kubernetes với khả năng:
-- **Chịu tải** - HPA (Horizontal Pod Autoscaler) + Cluster Autoscaler
-- **Sẵn sàng cao** - Node groups đa AZ, pod anti-affinity, rolling updates
-- **Bảo mật** - Network Policies, RBAC, Sealed Secrets, OPA/Gatekeeper
-- **Quan sát** - Prometheus + Grafana (metrics), Loki (logs), AlertManager
-- **Phục hồi thảm hoạ** - Velero backup (PV + tài nguyên cluster), etcd snapshots
+## Kubernetes là gì? (Giải thích trong 30 giây)
 
-## Kiến trúc phân tầng
+Hãy tưởng tượng bạn đang điều hành một nhà hàng:
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                   GitOps (ArgoCD / Flux)                      │
-│            Khai báo, phiên bản hoá, tự phục hồi               │
-├──────────────────────────────────────────────────────────────┤
-│                   Tầng Bảo mật                                │
-│   Network Policies · RBAC · Sealed Secrets · OPA/Gatekeeper  │
-├──────────────────────────────────────────────────────────────┤
-│                   Tầng Ứng dụng                               │
-│   Deployments · Services · Ingresses · HPAs · ConfigMaps     │
-├──────────────────────────────────────────────────────────────┤
-│                   Tầng Dữ liệu                                │
-│   MySQL (StatefulSet) · Redis (StatefulSet) · PVC + CSI      │
-├──────────────────────────────────────────────────────────────┤
-│                   Tầng Lưu trữ                                │
-│   StorageClass (gp3 / EBS CSI) · PVC tự động cấp phát        │
-├──────────────────────────────────────────────────────────────┤
-│                   Tầng Mạng                                   │
-│   Ingress-NGINX · cert-manager · CoreDNS · MetalLB (on-prem) │
-├──────────────────────────────────────────────────────────────┤
-│                   Tầng Cluster                                │
-│   EKS / Kubeadm / K3s · Managed Node Groups · VPC · Subnets  │
-├──────────────────────────────────────────────────────────────┤
-│                   Tầng Hạ tầng                                │
-│   AWS Account / On-Prem · IAM · Route53 · ACM · S3 backend   │
-└──────────────────────────────────────────────────────────────┘
-```
+- **Source code (app)** của bạn là công thức nấu ăn
+- **Một Pod** là một đầu bếp đang nấu món đó
+- **Một Deployment** là bếp trưởng — người đảm bảo luôn có đủ đầu bếp
+- **Một Service** là phục vụ bàn — người biết mang order đến đầu bếp nào
+- **Một Ingress** là cửa chính nhà hàng — tất cả khách đều vào qua đây
+- **Một Node** là căn bếp (một máy chủ vật lý hoặc ảo)
+- **Cluster** là toàn bộ nhà hàng
 
-## Luồng request
+Kubernetes (gọi tắt là K8s) là hệ thống quản lý tất cả những thứ trên một cách tự động. Bạn chỉ cần nói "chạy 3 bản sao ứng dụng của tôi", nó sẽ đảm bảo điều đó luôn đúng — kể cả khi một máy chủ bị hỏng.
 
-### 1. User truy cập ứng dụng
+## Dự Án Này Cung Cấp Gì Cho Bạn?
+
+Đây là một **bản thiết kế có sẵn** để chạy ứng dụng web trên Kubernetes. Thay vì tự mày mò nghiên cứu và cấu hình từng thứ, bạn nhận được:
+
+- Một Kubernetes cluster sẵn sàng cho production trên AWS
+- HTTPS tự động qua Let's Encrypt (miễn phí)
+- Cơ sở dữ liệu (MySQL, MariaDB, hoặc PostgreSQL — bạn chọn)
+- Tự động mở rộng (thêm bản sao khi traffic cao)
+- Giám sát trực quan (dashboard + cảnh báo)
+- Sao lưu tự động (chụp snapshot hàng ngày)
+- Bảo mật (tường lửa, mã hoá secrets)
+
+## Sơ đồ tổng quan
 
 ```
-User browser
-    │
-    ▼ DNS
-Domain (CNAME → Ingress LB / ALB)
-    │
-    ▼
-Ingress Controller (nginx / AWS ALB Ingress Controller)
-    │
-    ├─ TLS termination (cert-manager / ACM)
-    │
-    ▼
-Kubernetes Service (ClusterIP / NodePort)
-    │
-    ▼
-Kubernetes Deployment (Pods)
-    │
-    ├─ App container xử lý request
-    ├─ Đọc/ghi session → Redis (nếu có)
-    ├─ Đọc/ghi dữ liệu → MySQL (StatefulSet)
-    ├─ Đọc/ghi file → PVC (EBS / EFS CSI)
-    └─ Logs → stdout → Loki → Grafana
+                    ┌─────────────────────┐
+                    │     INTERNET         │
+                    └──────────┬──────────┘
+                               │
+                    ┌──────────▼──────────┐
+                    │   INGRESS-NGINX     │  ← "Cửa chính" (xử lý HTTPS)
+                    │   (TLS termination)  │
+                    └──────────┬──────────┘
+                               │
+           ┌───────────────────┼───────────────────┐
+           │                   │                   │
+           ▼                   ▼                   ▼
+    ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+    │  REACT SPA   │   │  LARAVEL API │   │  DATABASE    │
+    │  (Giao diện) │   │  (Xử lý)     │   │  (PostgreSQL)│
+    │  Nginx       │   │  PHP-FPM     │   │  3 bản sao   │
+    │  File tĩnh   │   │  + Horizon   │   │              │
+    └──────────────┘   └──────────────┘   └──────────────┘
 ```
 
-### 2. Luồng deploy stack
+## Các Tầng (Từ Dưới Lên Trên)
+
+Giống như xây nhà — bắt đầu từ móng rồi lên mái.
+
+### 1. Tầng Cluster (Móng Nhà + Đất)
+
+**Là gì:** Máy chủ và mạng lưới — nơi mọi thứ chạy trên đó.
+
+**Ví dụ thực tế:** Bạn mua một miếng đất, đổ móng, kéo điện và nước vào.
+
+**Dự án này tạo ra:**
+- **VPC**: Một mạng riêng (như khu đất có rào)
+- **Subnets**: Các khu vực trong mạng (như sân trước vs sân sau)
+- **EC2 instances**: Máy tính thật sự (máy chủ)
+- **EKS**: Dịch vụ Kubernetes của Amazon
+
+### 2. Tầng Mạng (Cửa + Khóa)
+
+**Là gì:** Kiểm soát ai được vào ứng dụng của bạn.
+
+**Ví dụ:** Cửa chính, camera an ninh, chuông cửa.
+
+**Thành phần:**
+- **Ingress-NGINX**: Cửa chính. Tất cả traffic từ Internet đều vào đây. Nó tự động xử lý mã hoá HTTPS.
+- **cert-manager**: Người làm chìa khoá tự động. Lấy chứng chỉ HTTPS miễn phí từ Let's Encrypt.
+- **CoreDNS**: Danh bạ nội bộ. Khi một service cần nói chuyện với service khác, nó tra danh bạ ở đây.
+
+### 3. Tầng Lưu trữ (Tủ đựng + Tủ lạnh)
+
+**Là gì:** Nơi ứng dụng lưu file vĩnh viễn.
+
+**Ví dụ:** Kệ đựng nguyên liệu trong bếp.
+
+**Khái niệm quan trọng — PVC (PersistentVolumeClaim):**
+PVC giống như một kệ được đặt trước. Ứng dụng nói "tôi cần 10GB", và Kubernetes tự động cấp phát. Dữ liệu vẫn còn ngay cả khi app khởi động lại.
+
+### 4. Tầng Dữ liệu (Database — MySQL/PostgreSQL)
+
+**Là gì:** Nơi dữ liệu có cấu trúc (tài khoản, đơn hàng, bài viết) được lưu.
+
+**Ví dụ:** Tủ hồ sơ có ngăn được dán nhãn.
+
+**Tại sao 3 bản sao?** Database chạy với 3 bản:
+- **1 Bản chính (Primary)**: Nơi ghi dữ liệu
+- **2 Bản phụ (Replicas)**: Bản sao đồng bộ. Đọc dữ liệu có thể vào đây để chia tải.
+
+Nếu bản chính hỏng, một bản phụ tự động lên làm chính. Đây gọi là **high availability**.
+
+### 5. Tầng Ứng dụng (Nhà hàng thật sự)
+
+**Là gì:** Code của bạn chạy trong container.
+
+**Ví dụ:** Đầu bếp, phục vụ, dụng cụ nhà bếp.
+
+**Thành phần:**
+- **Deployment**: Bếp trưởng — đảm bảo luôn có đủ đầu bếp
+- **Pod**: Một đầu bếp (một bản sao đang chạy)
+- **Service**: Phục vụ bàn — biết đưa order cho đầu bếp nào
+- **HPA**: Quản lý — thuê thêm đầu bếp khi đông khách
+- **PDB**: Quy tắc "không bao giờ để dưới 2 đầu bếp, kể cả lúc sửa bếp"
+
+### 6. Tầng Bảo mật (Khóa + Bảo vệ + Két sắt)
+
+**Là gì:** Kiểm soát ai được truy cập gì.
+
+**Ví dụ:** Khóa cửa, thẻ bảo vệ, két sắt.
+
+**Thành phần:**
+- **Network Policies**: Tường lửa. "Chỉ cửa chính mới được nói chuyện với bếp."
+- **RBAC**: Thẻ bảo vệ. "Chỉ quản lý mới vào được phòng làm việc."
+- **Sealed Secrets**: Két sắt mã hoá. Bạn có thể lưu mật khẩu trong Git mà không sợ bị đọc.
+
+### 7. Tầng Giám sát (Camera + Dashboard)
+
+**Là gì:** Theo dõi mọi thứ hoạt động có ổn không.
+
+**Ví dụ:** Camera an ninh, đồng hồ đo nhiệt độ, phòng điều khiển.
+
+**Thành phần:**
+- **Prometheus**: Thu thập số liệu (CPU, RAM, số lượng request)
+- **Grafana**: Hiển thị dashboard đẹp mắt (biểu đồ)
+- **Loki**: Lưu log (như cuốn nhật ký có thể tìm kiếm)
+- **AlertManager**: Gửi cảnh báo lên Slack hoặc email khi có vấn đề
+
+### 8. Tầng Sao lưu (Bảo hiểm)
+
+**Là gì:** Sao lưu tự động để không mất dữ liệu.
+
+**Ví dụ:** Hợp đồng bảo hiểm với chụp ảnh hiện trường hàng ngày.
+
+**Dự án này tạo ra:**
+- **Sao lưu hàng ngày**: 2 giờ sáng, chụp snapshot và lưu lên S3
+- **Giữ 30 ngày**: Khôi phục dữ liệu trong vòng 30 ngày
+- **Sao lưu tháng**: Giữ 90 ngày
+
+### 9. Tầng GitOps (Quản lý tự động)
+
+**Là gì:** Hệ thống theo dõi Git và tự động áp dụng thay đổi lên cluster.
+
+**Ví dụ:** Quản lý nhà hàng tự động, đọc sách công thức và đảm bảo bếp làm đúng.
+
+## Luồng Request: Ai Đó Truy Cập Website Của Bạn
+
+Khi ai đó gõ `https://myapp.example.com` trên trình duyệt:
 
 ```
-Admin apply Kustomize / Helm / ArgoCD
-    │
-    ▼
-── Tầng Cluster
-│     ├─ VPC + Subnets + Internet/NAT Gateways
-│     ├─ EKS Control Plane (hoặc kubeadm control plane)
-│     ├─ Managed Node Groups (đa AZ, on-demand + spot)
-│     └─ OIDC Provider + IAM Roles for Service Accounts (IRSA)
-│
-── Tầng Mạng (phụ thuộc Cluster)
-│     ├─ Ingress-NGINX Controller (DaemonSet / Deployment)
-│     ├─ cert-manager (Issuers, Certificates)
-│     └─ CoreDNS (DNS nội bộ)
-│
-── Tầng Lưu trữ (phụ thuộc Cluster)
-│     ├─ CSI Driver (EBS / EFS / RBD)
-│     ├─ StorageClass (gp3, mã hoá, reclaim: Delete)
-│     └─ Default PVC template
-│
-── Tầng Dữ liệu (phụ thuộc Storage)
-│     ├─ MySQL StatefulSet (3 bản sao, sync replication)
-│     │   ├─ Headless Service
-│     │   ├─ PVC template (10Gi mỗi pod)
-│     │   └─ ConfigMap (my.cnf tinh chỉnh)
-│     ├─ Redis StatefulSet (HA với sentinel / cluster)
-│     └── External Service (nếu dùng managed DB như RDS)
-│
-── Tầng Ứng dụng (phụ thuộc Mạng, Dữ liệu)
-│     ├─ Namespace
-│     ├─ ConfigMap / Secret (SealedSecret)
-│     ├─ Deployment (có resource limits, probes, anti-affinity)
-│     ├─ Service (ClusterIP)
-│     ├─ Ingress (với cert-manager annotation)
-│     └─ HPA (scale theo CPU + memory)
-│
-── Tầng Bảo mật (xuyên suốt)
-│     ├─ NetworkPolicy (default-deny, allow-app-ingress)
-│     ├─ RBAC (Roles, RoleBindings, ServiceAccounts)
-│     └─ Sealed Secrets / External Secrets Operator
-│
-── Tầng Giám sát (phụ thuộc Cluster)
-│     ├─ kube-prometheus-stack (Prometheus + Grafana)
-│     │   ├─ ServiceMonitor cho app metrics
-│     │   ├─ PodMonitor cho custom metrics
-│     │   └─ AlertManager (Slack, PagerDuty)
-│     └─ Loki Stack (Loki + Promtail + Grafana)
-│
-── Tầng Backup (phụ thuộc Storage)
-│     ├─ Velero (backup PVs + tài nguyên lên S3)
-│     ├─ Lịch trình (hàng ngày, giữ 30 ngày)
-│     └─ Restore演练
-│
-── Tầng GitOps (xuyên suốt)
-      ├─ ArgoCD / Flux
-      ├─ ApplicationSet (đa môi trường, đa cluster)
-      └─ Sync policies (auto-sync, prune, self-heal)
+Bước 1: Trình duyệt tra DNS → tìm IP của Ingress Controller
+Bước 2: Trình duyệt kết nối đến Ingress-NGINX (cửa chính)
+Bước 3: Ingress kiểm tra đường dẫn:
+  - /api/* → chuyển đến Laravel backend
+  - /* → chuyển đến React frontend
+Bước 4a (Laravel): PHP-FPM xử lý request, nói chuyện với PostgreSQL
+Bước 4b (React): Nginx trả file HTML/CSS/JavaScript
+Bước 5: Response đi ngược lại đến trình duyệt
 ```
 
-## Luồng Auto Scaling
+## Auto Scaling: Xử Lý Khi Lượng Truy Cập Tăng
 
 ```
-CPU cao (>75% trong 3 phút)
-    │
-    ├─ HPA
-    │     └─ Deployment replicas +1 (tối đa maxReplicas)
-    │
-    └─ Cluster Autoscaler (nếu có pod pending)
-          └─ Node Group +1 (tối đa maxSize)
-
-CPU thấp (<30% trong 5 phút)
-    │
-    ├─ HPA
-    │     └─ Deployment replicas -1 (tối thiểu minReplicas)
-    │
-    └─ Cluster Autoscaler (nếu node dùng ít tài nguyên)
-          └─ Node Group -1 (tối thiểu minSize)
+Lượng truy cập tăng đột biến
+      │
+      ▼
+Pod dùng nhiều CPU hơn (>75%)
+      │
+      ▼
+HPA phát hiện CPU cao
+      │
+      ├─ Thêm Pod (tối đa 20)
+      │
+      ▼
+Nếu cluster đầy, Cluster Autoscaler thêm server (node)
 ```
 
-## Luồng dữ liệu
+## Tóm tắt các tầng
 
-### Database (MySQL StatefulSet)
-- App → Service (mysql-svc) → MySQL Primary (read/write) → PVC (EBS gp3, 10Gi)
-- App → Service (mysql-svc-read) → MySQL Replicas (read-only) → PVC (EBS gp3, 10Gi)
-- Thông số tinh chỉnh: innodb_buffer_pool_size (70% RAM), max_connections (200), query_cache_type (0)
-
-### File storage (PVC + CSI)
-- PVC được cấp phát động qua StorageClass (EBS CSI / EFS CSI)
-- Access modes: ReadWriteOnce (EBS) hoặc ReadWriteMany (EFS)
-- Backup: Velero scheduled backup lên S3 (hàng ngày + hàng tháng)
-
-### Logging
-- Container stdout/stderr → Promtail (DaemonSet) → Loki
-- Retention: 7 ngày (hot) / 30 ngày (cold qua S3)
-- Dashboard Grafana để tra cứu log
-
-### Metrics
-- kube-state-metrics + node-exporter → Prometheus
-- Application custom metrics → Prometheus (qua Prometheus client lib)
-- Grafana dashboards: Kubernetes cluster, Node, Pod, Application
-
-## Bảo mật
-
-| Thành phần | Biện pháp |
-|------------|-----------|
-| **Cluster** | EKS private endpoint (hoặc kubeadm RBAC), OIDC + IRSA |
-| **Mạng** | Default-deny NetworkPolicy, chỉ cho phép ingress/egress cụ thể |
-| **Secrets** | Sealed Secrets (mã hoá trong git), External Secrets Operator |
-| **Container** | Non-root user, read-only root filesystem, resource limits |
-| **Image** | Signed images (cosign), quét lỗ hổng (trivy) |
-| **RBAC** | Least privilege, ServiceAccount riêng cho từng app |
-| **Pod Security** | Pod Security Standards (restricted profile) hoặc OPA/Gatekeeper |
-| **TLS** | cert-manager với Let's Encrypt / internal CA, tự động gia hạn |
+| Tầng | Chức năng | Ví dụ |
+|------|-----------|-------|
+| Cluster | Máy chủ + mạng | Móng nhà + đất |
+| Networking | HTTPS, DNS, định tuyến | Cửa + điện thoại |
+| Storage | Ổ cứng cho dữ liệu | Tủ chứa |
+| Data | Database | Tủ hồ sơ |
+| Application | Code của bạn | Đầu bếp + phục vụ |
+| Security | Tường lửa, mật khẩu | Khoá + bảo vệ + két sắt |
+| Monitoring | Dashboard, cảnh báo | Camera an ninh |
+| Backup | Sao lưu tự động | Bảo hiểm |
+| GitOps | Tự động hoá qua Git | Quản lý tự động |

@@ -1,619 +1,619 @@
-# Detailed Layer Walkthrough
+# Step-by-Step Guide: From Zero to Running Application
 
-## 1. Cluster Layer
+This guide walks through everything you need to know to deploy applications using this project. No prior Kubernetes knowledge required — we explain every command.
 
-**Role:** Provisions the Kubernetes control plane and worker nodes with networking infrastructure.
+## Before You Start: Tools You Need
 
-**Provisioning options:**
-- **AWS EKS** (recommended for AWS): eksctl manifest + CloudFormation
-- **Kubeadm** (on-prem / bare-metal): Ansible playbooks
-- **K3s** (lightweight / edge): Single binary + config file
+Install these tools on your laptop/computer. You only need to do this once.
 
-**Steps (EKS):**
-1. Create VPC with CIDR `10.0.0.0/16`
-   - 2 Public Subnets (`10.0.0.0/24`, `10.0.1.0/24`) for load balancers
-   - 2 Private Subnets (`10.0.2.0/24`, `10.0.3.0/24`) for workloads
-   - Internet Gateway + NAT Gateways per AZ
-2. Create EKS Control Plane (Fargate / managed)
-   - Control plane in VPC, multi-AZ, private endpoint enabled
-   - OIDC provider for IRSA
-   - Cluster encryption with KMS
-3. Create Managed Node Groups:
-   - **On-Demand group** (critical workloads, 1-5 nodes)
-   - **Spot group** (stateless workloads, 1-20 nodes, with `topologySpreadConstraints`)
-   - Launch template: AL2023 EKS-optimized AMI, gp3 root volume, IMDSv2
+### 1. Git
 
-**IAM:**
-- Cluster role (EKS service)
-- Node role (EC2 → ECR, CloudWatch, EBS CSI)
-- IRSA roles per workload (S3, DynamoDB, etc.)
+Git is how you download (clone) this project.
 
-**Outputs:** VPCId, PublicSubnets, PrivateSubnets, ClusterEndpoint, OIDCProvider, NodeGroupARNs
+**Check if already installed:**
+```bash
+git --version
+```
+If you see something like `git version 2.x.x`, you already have it.
+
+**Install:**
+- **Ubuntu/Debian**: `sudo apt install git -y`
+- **macOS**: `brew install git` or download from https://git-scm.com
+- **Windows**: Download from https://git-scm.com
+
+### 2. AWS CLI
+
+This lets your computer talk to Amazon Web Services (AWS).
+
+**Install:**
+```bash
+# Linux:
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+
+# macOS:
+brew install awscli
+
+# Windows: Download from https://aws.amazon.com/cli/
+```
+
+**Configure with your AWS account:**
+```bash
+aws configure
+```
+You'll need your AWS Access Key ID and Secret Access Key from the AWS Console (IAM > Users > Your User > Security Credentials).
+
+### 3. eksctl
+
+This tool creates Kubernetes clusters on AWS.
+
+**Install:**
+```bash
+# Linux (x86_64):
+curl -sLO "https://github.com/eksctl-io/eksctl/releases/latest/download/eksctl_Linux_amd64.tar.gz"
+tar -xzf eksctl_Linux_amd64.tar.gz
+sudo mv eksctl /usr/local/bin/
+
+# macOS:
+brew install eksctl
+
+# Windows: Download from eksctl.io
+```
+
+**Verify:**
+```bash
+eksctl version
+```
+
+### 4. kubectl
+
+This is the main tool for controlling Kubernetes. You'll use it a lot.
+
+**Install:**
+```bash
+# Linux:
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+chmod +x kubectl
+sudo mv kubectl /usr/local/bin/
+
+# macOS:
+brew install kubectl
+
+# Windows: Download from https://kubernetes.io/docs/tasks/tools/
+```
+
+**Verify:**
+```bash
+kubectl version --client
+```
+
+### 5. Helm
+
+Helm is a "package manager" for Kubernetes — it helps install complex software easily.
+
+**Install:**
+```bash
+# Linux:
+curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+chmod +x get_helm.sh
+./get_helm.sh
+
+# macOS:
+brew install helm
+
+# Windows: choco install kubernetes-helm
+```
+
+**Verify:**
+```bash
+helm version
+```
+
+### 6. kustomize
+
+Kustomize helps customize Kubernetes configurations (already built into kubectl).
+
+**Verify:**
+```bash
+kubectl kustomize --help
+```
+If this works, you're all set.
 
 ---
 
-## 2. Networking Layer
+## Step 1: Clone This Project
 
-**Role:** Manages traffic routing, TLS termination, and DNS resolution inside the cluster.
+Download the project files to your computer.
 
-### 2.1 Ingress-NGINX Controller
-
-**Purpose:** Acts as the entry point for all HTTP/HTTPS traffic from outside the cluster.
-
-**Installation:** Helm chart from ingress-nginx repo.
-
-**Configuration:**
-```yaml
-controller:
-  kind: DaemonSet          # one per node for hostNetwork
-  service:
-    type: LoadBalancer     # provision AWS NLB
-    annotations:
-      service.beta.kubernetes.io/aws-load-balancer-type: nlb
-      service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
-  config:
-    ssl-redirect: "true"
-    use-proxy-protocol: "true"
-    hsts: "true"
-    hsts-max-age: "31536000"
+```bash
+git clone https://github.com/nathanpixodeo/k8s-production-stack.git
+cd k8s-production-stack
 ```
 
-**Flow:** Internet → NLB (Layer 4) → NGINX (Layer 7, TLS) → Service → Pods
+**What just happened?**
+- `git clone` downloaded all files to a folder called `k8s-production-stack`
+- `cd` moves you into that folder
 
-### 2.2 cert-manager
-
-**Purpose:** Automates TLS certificate provisioning and renewal.
-
-**Installation:** Helm chart from jetstack repo.
-
-**Resources created:**
-- `ClusterIssuer` (Let's Encrypt production)
-- `Certificate` for each ingress (auto-renewal 30 days before expiry)
-
-**Annotations used by Ingress:**
-```yaml
-cert-manager.io/cluster-issuer: letsencrypt-prod
-kubernetes.io/tls-acme: "true"
+**Check what you downloaded:**
+```bash
+ls -la
 ```
-
-**Flow:** cert-manager → ACME challenge (HTTP-01 / DNS-01) → Let's Encrypt → Secret (tls) → Ingress
-
-### 2.3 CoreDNS
-
-**Purpose:** Provides internal DNS resolution for Services (built-in with most clusters).
-
-**Configuration:**
-- Custom domain: `cluster.local`
-- Forward external queries to VPC DNS resolver
-- Autoscaling based on cluster size
+You should see folders like `clusters/`, `database/`, `application/`, etc.
 
 ---
 
-## 3. Storage Layer
+## Step 2: Create the Kubernetes Cluster
 
-**Role:** Provides dynamic persistent volume provisioning with proper performance and encryption.
+This is the biggest step. It creates the actual servers (called nodes) on AWS.
 
-**Components:**
-1. **CSI Driver** (EBS CSI / EFS CSI / Rook-Ceph)
-2. **StorageClass** definitions
-3. **VolumeSnapshotClass** (for backup)
-
-### 3.1 StorageClass Configuration
-
-```yaml
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: gp3
-provisioner: ebs.csi.aws.com
-volumeBindingMode: WaitForFirstConsumer  # schedule pod first, then provision in same AZ
-parameters:
-  type: gp3
-  encrypted: "true"
-  iops: "3000"            # baseline gp3 IOPS
-  throughput: "125"       # baseline gp3 throughput (MB/s)
-reclaimPolicy: Delete     # auto-delete PV on PVC deletion
-allowVolumeExpansion: true
+```bash
+eksctl create cluster -f clusters/eksctl-cluster.yaml
 ```
 
-**Usage:**
-- **Stateful workloads** (MySQL, Redis): `spec.storageClassName: gp3` with `ReadWriteOnce`
-- **Shared files** (CMS uploads, logs): EFS CSI with `ReadWriteMany`
-- **Temporary data** (CI artifacts): `ephemeral` volumes or `EmptyDir`
+**What this does:**
+- Reads the file `clusters/eksctl-cluster.yaml` — our blueprint
+- Creates a VPC (private network) with public and private subnets
+- Creates a Kubernetes control plane (the "brain" of the cluster)
+- Creates server instances (EC2) — 2 on-demand + spot instances
+- Configures networking so everything can talk to each other
+
+**This takes 15-25 minutes.** Go grab a coffee.
+
+**How to check progress:**
+```bash
+eksctl get cluster
+```
+
+**After it finishes, verify:**
+```bash
+kubectl get nodes
+```
+You should see something like:
+```
+NAME                          STATUS   ROLES    AGE   VERSION
+ip-10-0-2-xxx.ec2.internal   Ready    <none>   5m   v1.31
+ip-10-0-3-xxx.ec2.internal   Ready    <none>   5m   v1.31
+```
+
+**Understanding this output:**
+- `NAME`: The internal name of each server
+- `STATUS: Ready`: The server is ready to run applications
+- You have 2 servers (nodes) in different availability zones
+
+**What is kubectl doing?**
+`kubectl` (say "kube-control") is like a remote control for your cluster. Every time you run `kubectl`, it:
+1. Reads from `~/.kube/config` (created by eksctl) to find your cluster
+2. Sends commands to the cluster's control plane
+3. Returns the result
+
+You don't need to worry about how this works — just remember that `kubectl` is how you talk to your cluster.
 
 ---
 
-## 4. Data Layer
+## Step 3: Configure Storage
 
-**Role:** Runs stateful workloads with high availability and data persistence.
+Your applications need hard drives. This step sets up the hard drive system.
 
-### 4.1 MySQL StatefulSet
-
-**Purpose:** Relational database for application data.
-
-**Architecture:**
-- 3 pods: 1 Primary (read/write) + 2 Replicas (read-only)
-- Headless Service for stable DNS names
-- Each pod has its own PVC (10Gi gp3)
-- Semi-sync replication (orchestrated via ConfigMap scripts)
-
-**Tuning (ConfigMap):**
-```ini
-[mysqld]
-innodb_buffer_pool_size = 70% of RAM
-innodb_log_file_size = 512M
-max_connections = 200
-character-set-server = utf8mb4
-collation-server = utf8mb4_unicode_ci
+```bash
+kubectl apply -k storage/
 ```
 
-**Flow:**
+**What this does:**
+- `kubectl apply` means "create or update these resources"
+- `-k storage/` means "read the kustomization.yaml in the storage folder"
+
+**What gets created:**
+- A **StorageClass** called `gp3` — this is the "type of hard drive" (fast SSD)
+- It becomes the default, so any app that asks for storage automatically gets this fast SSD
+- A **VolumeSnapshotClass** — this allows creating point-in-time backups of volumes
+
+**Verify:**
+```bash
+kubectl get storageclass
 ```
-App → mysql-svc:3306 → Primary (write) → PVC
-                      → Replicas (read) → PVC
+You should see:
 ```
-
-### 4.2 Redis (Optional)
-
-**Purpose:** Caching, session store, rate limiting.
-
-**Architecture:**
-- 3-pod Redis Sentinel (or Redis Cluster for HA)
-- Headless Service
-- PVC with small gp3 volume (1Gi)
-- AOF persistence enabled
-
-### 4.3 External Database Service
-
-**Purpose:** Connect to managed database (RDS, Cloud SQL, etc.) instead of in-cluster MySQL.
-
-**Configuration:**
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: mysql-external
-spec:
-  type: ExternalName
-  externalName: myapp.xxxxxxxxxxxx.region.rds.amazonaws.com
----
-kind: EndpointSlice
-# ... points to RDS endpoint IP
-```
-
----
-
-## 5. Application Layer
-
-**Role:** Runs the actual application workload with proper configuration, scaling, and health management.
-
-### 5.1 Namespace
-
-```yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: myapp
-```
-
-### 5.2 ConfigMap / Secret
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: myapp-config
-  namespace: myapp
-data:
-  APP_ENV: production
-  APP_DEBUG: "false"
-  DB_HOST: mysql-svc
-  DB_PORT: "3306"
-  DB_NAME: myapp
----
-# Secrets should be stored as SealedSecrets (see Security Layer)
-apiVersion: bitnami.com/v1alpha1
-kind: SealedSecret
-metadata:
-  name: myapp-secrets
-  namespace: myapp
-spec:
-  encryptedData:
-    DB_PASSWORD: <encrypted-with-kubeseal>
-```
-
-### 5.3 Deployment
-
-**Key configurations:**
-- **Resource requests/limits** - Guarantee QoS class, avoid resource starvation
-- **Readiness + Liveness probes** - Traffic routing + self-healing
-- **Pod Anti-Affinity** - Spread pods across nodes/AZs
-- **Topology Spread Constraints** - Even distribution
-- **Pod Disruption Budget** - Minimum available during voluntary disruptions
-- **Graceful shutdown** - `preStop` hook + `terminationGracePeriodSeconds`
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: myapp
-  namespace: myapp
-spec:
-  replicas: 3
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 1
-      maxSurge: 1
-  template:
-    spec:
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            podAffinityTerm:
-              labelSelector:
-                matchLabels:
-                  app: myapp
-              topologyKey: topology.kubernetes.io/zone
-      containers:
-      - name: app
-        resources:
-          requests:
-            cpu: 250m
-            memory: 256Mi
-          limits:
-            cpu: 500m
-            memory: 512Mi
-        livenessProbe:
-          httpGet:
-            path: /healthz
-            port: 8080
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /ready
-            port: 8080
-          initialDelaySeconds: 5
-          periodSeconds: 5
-```
-
-### 5.4 Service & Ingress
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: myapp-svc
-  namespace: myapp
-spec:
-  type: ClusterIP
-  ports:
-  - port: 80
-    targetPort: 8080
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: myapp-ingress
-  namespace: myapp
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-spec:
-  ingressClassName: nginx
-  tls:
-  - hosts:
-    - myapp.example.com
-    secretName: myapp-tls
-  rules:
-  - host: myapp.example.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: myapp-svc
-            port:
-              number: 80
-```
-
-### 5.5 HPA (Horizontal Pod Autoscaler)
-
-```yaml
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: myapp-hpa
-  namespace: myapp
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: myapp
-  minReplicas: 3
-  maxReplicas: 20
-  metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 75
-  - type: Resource
-    resource:
-      name: memory
-      target:
-        type: Utilization
-        averageUtilization: 80
+NAME   PROVISIONER       RECLAIMPOLICY   VOLUMEBINDINGMODE   ALLOWVOLUMEEXPANSION
+gp3    ebs.csi.aws.com   Delete          WaitForFirstConsumer true
 ```
 
 ---
 
-## 6. Security Layer
+## Step 4: Install Networking (The Front Door)
 
-**Role:** Enforces security boundaries, least privilege access, and secret management.
+This installs the system that handles internet traffic to your applications.
 
-### 6.1 Network Policies
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: default-deny-all
-  namespace: myapp
-spec:
-  podSelector: {}
-  policyTypes:
-  - Ingress
-  - Egress
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-ingress-controller
-  namespace: myapp
-spec:
-  podSelector:
-    matchLabels:
-      app: myapp
-  ingress:
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: ingress-nginx
-    ports:
-    - port: 8080
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-egress-mysql
-  namespace: myapp
-spec:
-  podSelector:
-    matchLabels:
-      app: myapp
-  egress:
-  - to:
-    - podSelector:
-        matchLabels:
-          app: mysql
-    ports:
-    - port: 3306
-  - to:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: kube-system
-    ports:
-    - port: 53
+```bash
+kubectl apply -k networking/
 ```
 
-### 6.2 RBAC
+**What gets created:**
 
-```yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: myapp-sa
-  namespace: myapp
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  namespace: myapp
-  name: myapp-role
-rules:
-- apiGroups: [""]
-  resources: ["configmaps", "secrets"]
-  verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: myapp-binding
-  namespace: myapp
-subjects:
-- kind: ServiceAccount
-  name: myapp-sa
-  namespace: myapp
-roleRef:
-  kind: Role
-  name: myapp-role
-  apiGroup: rbac.authorization.k8s.io
+### Ingress-NGINX (The Main Door)
+- An **Ingress Controller** — think of it as a smart router that sits at the front of your cluster
+- It creates an **AWS Network Load Balancer (NLB)** — a real AWS load balancer
+- All internet traffic comes through this load balancer first
+- It handles: HTTPS encryption, routing traffic to the right service, rate limiting
+
+### cert-manager (The Automatic Key Maker)
+- Automatically gets free **TLS/SSL certificates** from Let's Encrypt
+- These certificates enable HTTPS (the green padlock in browsers)
+- It automatically renews certificates before they expire (every 90 days)
+
+**Verify:**
+```bash
+# Check if the ingress controller pod is running
+kubectl get pods -n ingress-nginx
+
+# Should show something like:
+# NAME                                       READY   STATUS    RESTARTS   AGE
+# ingress-nginx-controller-xxxxx            1/1     Running   0          2m
+
+# Check if cert-manager pods are running
+kubectl get pods -n cert-manager
 ```
 
-### 6.3 Sealed Secrets
-
-**Purpose:** Encrypt Kubernetes Secrets so they can be safely stored in git.
-
-**Workflow:**
-1. Developer creates a Secret yaml
-2. Runs `kubeseal` → produces SealedSecret (encrypted, safe for git)
-3. Commits SealedSecret to repo
-4. ArgoCD applies SealedSecret → controller decrypts → creates regular Secret
+**Finding your load balancer URL:**
+```bash
+kubectl get svc -n ingress-nginx
+```
+Look for the `EXTERNAL-IP` column. This is the DNS name of your load balancer. You'll need this later to create a custom domain.
 
 ---
 
-## 7. Monitoring Layer
+## Step 5: Install Monitoring (The Dashboard)
 
-**Role:** Provides observability into cluster health, application metrics, and logs.
+This installs Prometheus (metrics collector) and Grafana (visual dashboards).
 
-### 7.1 Prometheus + Grafana
-
-**Installation:** kube-prometheus-stack Helm chart.
-
-**Components:**
-- **Prometheus** - Metrics storage, alert evaluation
-- **Grafana** - Dashboards + alerting UI
-- **AlertManager** - Alert routing (Slack, PagerDuty, email)
-- **kube-state-metrics** - Cluster object metrics
-- **node-exporter** - Node-level metrics (CPU, memory, disk, network)
-
-**Application monitoring:**
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: myapp-monitor
-  namespace: myapp
-spec:
-  selector:
-    matchLabels:
-      app: myapp
-  endpoints:
-  - port: metrics       # must match Service port name
-    interval: 15s
-    path: /metrics
+```bash
+kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -k monitoring/
 ```
 
-### 7.2 Loki (Logging)
+**What gets created:**
+- **Prometheus**: Collects metrics from every pod, service, and node
+- **Grafana**: Shows beautiful dashboards (CPU, memory, request rates, etc.)
+- **AlertManager**: Sends alerts if something goes wrong
+- **Loki + Promtail**: Collects and stores logs from all containers
+- **kube-state-metrics**: Gets information about Kubernetes objects
+- **node-exporter**: Gets metrics from each server (disk, network, etc.)
 
-**Installation:** Loki Helm chart with Grafana datasource.
+**Access Grafana:**
+```bash
+kubectl get ingress -n monitoring
+```
+Look for the Grafana ingress host, or:
+```bash
+kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80
+```
+Then open http://localhost:3000 in your browser.
 
-**Components:**
-- **Loki** - Log aggregation (similar to Prometheus but for logs)
-- **Promtail** - DaemonSet, collects logs from `/var/log/pods/*`
-- **Grafana** - Explore logs UI
+**Default login:** admin / prom-operator (unless you changed it)
 
----
-
-## 8. Backup Layer (Velero)
-
-**Role:** Backup and restore Kubernetes resources and persistent volumes.
-
-**Installation:** Velero Helm chart with AWS S3 plugin.
-
-**Configuration:**
-```yaml
-configuration:
-  backupStorageLocation:
-  - name: default
-    provider: aws
-    bucket: myapp-velero-backups
-    config:
-      region: ca-central-1
-  volumeSnapshotLocation:
-  - name: default
-    provider: aws
-    config:
-      region: ca-central-1
-schedules:
-  daily-backup:
-    schedule: "0 2 * * *"
-    template:
-      ttl: 720h   # 30 days
-      includedNamespaces:
-      - myapp
+**Wait for everything to be ready:**
+```bash
+kubectl wait --for=condition=Ready pods --all -n monitoring --timeout=300s
 ```
 
 ---
 
-## 9. GitOps Layer (ArgoCD)
+## Step 6: Install Security (Firewalls + Access Control)
 
-**Role:** Declarative, version-controlled application deployment with automated sync and self-healing.
+This sets up network firewalls and access controls.
 
-**Installation:** ArgoCD Helm chart with HA configuration.
+```bash
+kubectl apply -k security/
+```
 
-**Key Features:**
-- **Auto-sync** - Automatically apply changes from git
-- **Self-heal** - Revert manual changes to match git state
-- **Prune** - Delete resources removed from git
-- **ApplicationSet** - Generate apps per environment/cluster
-- **Sync waves** - Order resource creation (CRDs first, then workloads)
+**What gets created:**
 
-**ApplicationSet example:**
-```yaml
-apiVersion: argoproj.io/v1alpha1
-kind: ApplicationSet
-metadata:
-  name: myapp
-spec:
-  generators:
-  - list:
-      elements:
-      - env: staging
-        cluster: https://staging-cluster:6443
-      - env: production
-        cluster: https://production-cluster:6443
-  template:
-    metadata:
-      name: '{{env}}-myapp'
-    spec:
-      project: default
-      source:
-        repoURL: https://github.com/org/myapp.git
-        targetRevision: HEAD
-        path: 'kustomize/overlays/{{env}}'
-      destination:
-        server: '{{cluster}}'
-        namespace: myapp-{{env}}
-      syncPolicy:
-        automated:
-          prune: true
-          selfHeal: true
-        syncOptions:
-        - CreateNamespace=true
+### Network Policies (Firewalls)
+- **Default-deny**: By default, nothing can talk to anything. It's like locking all doors.
+- **Allow rules**: Specific doors are unlocked for specific traffic:
+  - Ingress controller can talk to application pods
+  - Application pods can talk to the database
+  - Application pods can access DNS (to resolve domain names)
+
+### RBAC (Access Control)
+- A **ServiceAccount** named `myapp-sa` — like a "service badge" for your app
+- A **Role** that gives limited permissions (read configmaps, secrets)
+- A **RoleBinding** that attaches the role to the service account
+
+### Sealed Secrets
+- Installs the Sealed Secrets controller
+- Allows you to encrypt secrets so they can be safely stored in Git
+
+**Verify:**
+```bash
+kubectl get networkpolicies -n myapp
+kubectl get serviceaccount -n myapp
 ```
 
 ---
 
-## Deployment order summary
+## Step 7: Install Database
 
-```
-1. Cluster + VPC (eksctl / kubeadm)
-2. StorageClass (CSI driver)
-3. Ingress-NGINX + cert-manager
-4. Monitoring (Prometheus, Grafana, Loki)
-5. Security (Sealed Secrets, NetworkPolicies, RBAC)
-6. Data Layer (MySQL, Redis)
-7. Application (Namespace, ConfigMap, Deployment, Service, Ingress, HPA)
-8. Backup (Velero)
-9. GitOps (ArgoCD)
-```
+Choose your database engine. The default is MySQL.
 
-## Zero-downtime deployment flow
+```bash
+# For MySQL (default):
+kubectl apply -k database/
 
-```
-1. HPA scales up new replica
-2. RollingUpdate starts new pod
-3. Readiness probe passes → new pod added to Service
-4. Old pod continues serving until new pod is Ready
-5. Old pod receives SIGTERM → preStop hook drains connections
-6. Old pod terminates
-7. Repeat until all pods replaced
+# For PostgreSQL (needed for fullstack setup):
+# First edit database/kustomization.yaml, then:
+# kubectl apply -k database/postgresql/
 ```
 
-## Disaster recovery flow
+**What gets created:**
+- A **StatefulSet** with 3 database replicas (1 primary + 2 replicas)
+- The primary handles all writes
+- Replicas handle reads (spreading the load)
+- Each replica gets its own **PersistentVolumeClaim** (10GB SSD)
+- A **Headless Service** for stable network identities
+- A **ConfigMap** with the tuned database configuration
+- A **Secret** with the database password
 
+**What is a StatefulSet?**
+Unlike a regular Deployment (where pods are interchangeable), a StatefulSet gives each pod a stable identity. Database pods need this because:
+- `mysql-0` is always the primary (writes go here)
+- `mysql-1` and `mysql-2` are always replicas
+- When they restart, they keep the same identity and the same storage
+
+**Verify:**
+```bash
+# Check the pods are starting
+kubectl get pods -n myapp -w
+
+# Eventually you should see:
+# NAME        READY   STATUS    RESTARTS   AGE
+# mysql-0     1/1     Running   0          3m
+# mysql-1     1/1     Running   0          2m
+# mysql-2     1/1     Running   0          1m
+
+# Check the services
+kubectl get svc -n myapp
+# You should see: database-svc, database-svc-read, database-headless
 ```
-1. velero backup create --include-namespaces myapp --ttl 720h
-2. (Disaster occurs)
-3. Deploy new cluster (eksctl)
-4. velero restore create --from-backup <backup-name>
-5. Restore includes: PVs (snapshots), Deployments, Services, Ingresses, ConfigMaps, Secrets
-6. Verify application health
-7. Update DNS to new Ingress LB
+
+---
+
+## Step 8: Deploy Your Application
+
+Choose how you want to deploy:
+
+### Option A: Generic Application
+
+```bash
+kubectl apply -k application/
 ```
+
+Creates a simple web application deployment.
+
+### Option B: Laravel API
+
+```bash
+kubectl apply -k frameworks/laravel/
+```
+
+Creates:
+- PHP-FPM container running Laravel
+- Nginx container as reverse proxy
+- Horizon queue worker
+- Schedule runner CronJob
+
+### Option C: React Frontend
+
+```bash
+kubectl apply -k frameworks/react/
+```
+
+Creates:
+- Nginx container serving built React files
+- An HPA to handle variable traffic
+
+### Option D: Fullstack (Laravel + React + PostgreSQL) — Recommended
+
+```bash
+# First make sure PostgreSQL is deployed:
+kubectl apply -k database/postgresql/
+
+# Then deploy the fullstack:
+kubectl apply -k frameworks/fullstack/
+```
+
+Creates everything in one go:
+- PostgreSQL database
+- Laravel API backend with Horizon
+- React frontend with Nginx
+- A unified Ingress that routes:
+  - `/api/*` → Laravel
+  - `/storage/*` → Laravel
+  - `/horizon/*` → Laravel
+  - `/*` → React SPA
+
+**Important: You must build your Docker images first.**
+
+This project expects you to have built and pushed your application images to a container registry (like Docker Hub or Amazon ECR).
+
+For Laravel, build your image:
+```dockerfile
+# Example Dockerfile for Laravel
+FROM php:8.3-fpm-alpine
+RUN docker-php-ext-install pdo pdo_pgsql
+COPY . /var/www/html
+WORKDIR /var/www/html
+```
+
+For React, build your image:
+```dockerfile
+# Example Dockerfile for React
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM nginx:1.27-alpine
+COPY --from=builder /app/build /usr/share/nginx/html
+```
+
+Then update the image name in the deployment files.
+
+**Verify:**
+```bash
+kubectl get pods -n myapp -w
+kubectl get ingress -n myapp
+kubectl get svc -n myapp
+```
+
+---
+
+## Step 9: Install Backups
+
+```bash
+kubectl apply -k backup/
+```
+
+This installs **Velero** — a backup tool that:
+- Takes daily snapshots of your database and application data
+- Stores them in AWS S3 cloud storage
+- Keeps daily backups for 30 days
+- Keeps monthly backups for 90 days
+
+**Important:** Before running this, edit `backup/velero/values.yaml` and set:
+- Your AWS S3 bucket name
+- Your AWS access key and secret key (for backup storage)
+
+---
+
+## Step 10: Install GitOps (Optional)
+
+```bash
+kubectl apply -k gitops/
+```
+
+This installs **ArgoCD** — a tool that:
+- Watches your Git repository for changes
+- Automatically applies those changes to your cluster
+- Shows you a nice UI with all your applications
+- Rolls back changes if something goes wrong
+
+---
+
+## How to Access Your Application
+
+### 1. Find the Load Balancer URL
+
+```bash
+kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+```
+
+This gives you a DNS name like `xxxxxxxxxxxxx-xxxx.elb.amazonaws.com`.
+
+### 2. Set Up a Custom Domain (Optional but Recommended)
+
+In your DNS provider (Route53, Cloudflare, etc.):
+1. Create a CNAME record pointing `myapp.example.com` → the load balancer URL above
+2. The cert-manager will automatically get an HTTPS certificate for your domain
+
+### 3. Check the Application
+
+```bash
+# Get all ingress URLs
+kubectl get ingress -A
+```
+
+---
+
+## How to Destroy Everything
+
+**WARNING:** This deletes everything permanently, including the database.
+
+```bash
+# Option 1: Using the script
+./scripts/destroy.sh
+
+# Option 2: Manual
+kubectl delete -k frameworks/fullstack/
+kubectl delete -k database/
+kubectl delete pv --all
+eksctl delete cluster -f clusters/eksctl-cluster.yaml
+```
+
+---
+
+## Common Commands Cheat Sheet
+
+| If you want to... | Run this command |
+|-------------------|------------------|
+| See all running pods | `kubectl get pods -A` |
+| See pod details | `kubectl describe pod <name> -n <namespace>` |
+| See app logs | `kubectl logs -n myapp -l app=laravel` |
+| Follow logs live | `kubectl logs -n myapp -l app=laravel -f` |
+| Run a command in a pod | `kubectl exec -n myapp deploy/laravel -- php artisan list` |
+| See services | `kubectl get svc -A` |
+| See ingresses | `kubectl get ingress -A` |
+| See all resources | `kubectl get all -n myapp` |
+| Edit a deployment | `kubectl edit deployment laravel -n myapp` |
+| Restart a deployment | `kubectl rollout restart deployment laravel -n myapp` |
+| See deployment status | `kubectl rollout status deployment laravel -n myapp` |
+| Port-forward to a service | `kubectl port-forward -n myapp svc/laravel-svc 8080:80` |
+| Open a shell in a pod | `kubectl exec -n myapp -it deploy/laravel -- /bin/sh` |
+
+---
+
+## Troubleshooting
+
+### Pod stuck in "Pending" state
+This usually means there aren't enough resources. Check:
+```bash
+kubectl describe pod <name> -n <namespace>
+```
+Look for "Insufficient CPU" or "Insufficient memory" messages.
+
+### Pod stuck in "CrashLoopBackOff"
+The app keeps crashing. Check the logs:
+```bash
+kubectl logs -n myapp <pod-name> --previous
+```
+
+### Can't connect to the app
+Make sure the ingress is configured:
+```bash
+kubectl get ingress -A
+kubectl describe ingress -n myapp
+```
+
+### Database won't start
+Check if the PVC is created:
+```bash
+kubectl get pvc -n myapp
+```
+
+If it's stuck in "Pending", there might be a StorageClass issue:
+```bash
+kubectl describe pvc -n myapp
+```
+
+## Glossary of Terms
+
+| Term | Meaning | Analogy |
+|------|---------|---------|
+| **Cluster** | The entire Kubernetes system (servers + control plane) | The restaurant building |
+| **Node** | One server machine in the cluster | One kitchen |
+| **Pod** | The smallest unit in K8s — one or more containers | One chef |
+| **Deployment** | Manages a group of identical pods | The head chef |
+| **Service** | A stable network endpoint for a set of pods | The waiter |
+| **Ingress** | The entry point for external traffic | The front door |
+| **Namespace** | A way to organize resources (like folders) | A section of the restaurant |
+| **ConfigMap** | Stores configuration (not secret) | A recipe card |
+| **Secret** | Stores sensitive data (passwords, keys) | A safe combination |
+| **PVC** | Request for storage | Ordering a new shelf |
+| **PV** | The actual storage allocated | The shelf itself |
+| **StatefulSet** | Like Deployment but with stable identities | Assigned seating |
+| **HPA** | Auto-scaling based on CPU/memory | Hiring temps during rush hour |
+| **PDB** | Minimum pods during disruptions | Minimum staff rule |
+| **RBAC** | Access control system | Security badges |
+| **NetworkPolicy** | Firewall rules | Door locks |

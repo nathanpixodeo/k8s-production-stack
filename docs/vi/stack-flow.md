@@ -1,616 +1,301 @@
-# Chi tiết từng tầng
+# Hướng dẫn từng bước: Từ số 0 đến ứng dụng chạy trên Kubernetes
 
-## 1. Tầng Cluster
+Hướng dẫn này giải thích mọi thứ bạn cần để triển khai ứng dụng với dự án này. Không yêu cầu kiến thức Kubernetes trước đó.
 
-**Vai trò:** Cung cấp Kubernetes control plane và worker nodes cùng hạ tầng mạng.
+## Trước khi bắt đầu: Các công cụ cần cài đặt
 
-**Các lựa chọn cấp phát:**
-- **AWS EKS** (khuyến nghị cho AWS): eksctl manifest + CloudFormation
-- **Kubeadm** (on-prem / bare-metal): Playbooks Ansible
-- **K3s** (nhẹ / edge): Binary đơn + file cấu hình
+### 1. Git
 
-**Các bước (EKS):**
-1. Tạo VPC với CIDR `10.0.0.0/16`
-   - 2 Public Subnet (`10.0.0.0/24`, `10.0.1.0/24`) cho load balancer
-   - 2 Private Subnet (`10.0.2.0/24`, `10.0.3.0/24`) cho workloads
-   - Internet Gateway + NAT Gateway mỗi AZ
-2. Tạo EKS Control Plane (Fargate / managed)
-   - Control plane trong VPC, đa AZ, private endpoint
-   - OIDC provider cho IRSA
-   - Mã hoá cluster với KMS
-3. Tạo Managed Node Groups:
-   - **On-Demand group** (workloads quan trọng, 1-5 nodes)
-   - **Spot group** (stateless workloads, 1-20 nodes, dùng `topologySpreadConstraints`)
-   - Launch template: AL2023 EKS-optimized AMI, gp3 root volume, IMDSv2
+Công cụ tải mã nguồn từ GitHub.
 
-**IAM:**
-- Cluster role (EKS service)
-- Node role (EC2 → ECR, CloudWatch, EBS CSI)
-- IRSA roles cho từng workload (S3, DynamoDB, etc.)
+```bash
+git --version   # Kiểm tra đã cài chưa
+```
 
-**Outputs:** VPCId, PublicSubnets, PrivateSubnets, ClusterEndpoint, OIDCProvider, NodeGroupARNs
+**Cài đặt:**
+- **Ubuntu/Debian**: `sudo apt install git -y`
+- **macOS**: `brew install git` hoặc tải từ https://git-scm.com
+- **Windows**: Tải từ https://git-scm.com
 
----
+### 2. AWS CLI
 
-## 2. Tầng Mạng
+Cho phép máy tính của bạn nói chuyện với Amazon Web Services.
 
-**Vai trò:** Quản lý định tuyến traffic, TLS termination, và DNS nội bộ trong cluster.
+```bash
+# Linux:
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
 
-### 2.1 Ingress-NGINX Controller
-
-**Mục đích:** Điểm vào cho tất cả traffic HTTP/HTTPS từ bên ngoài vào cluster.
-
-**Cài đặt:** Helm chart từ ingress-nginx repo.
+# macOS: brew install awscli
+```
 
 **Cấu hình:**
-```yaml
-controller:
-  kind: DaemonSet          # mỗi node một pod, dùng hostNetwork
-  service:
-    type: LoadBalancer     # tạo AWS NLB
-    annotations:
-      service.beta.kubernetes.io/aws-load-balancer-type: nlb
-      service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
-  config:
-    ssl-redirect: "true"
-    use-proxy-protocol: "true"
-    hsts: "true"
-    hsts-max-age: "31536000"
+```bash
+aws configure
+```
+Bạn cần Access Key ID và Secret Access Key từ AWS Console.
+
+### 3. eksctl
+
+Công cụ tạo Kubernetes cluster trên AWS.
+
+```bash
+# Linux:
+curl -sLO "https://github.com/eksctl-io/eksctl/releases/latest/download/eksctl_Linux_amd64.tar.gz"
+tar -xzf eksctl_Linux_amd64.tar.gz
+sudo mv eksctl /usr/local/bin/
+
+# macOS: brew install eksctl
 ```
 
-**Luồng:** Internet → NLB (Layer 4) → NGINX (Layer 7, TLS) → Service → Pods
+### 4. kubectl
 
-### 2.2 cert-manager
+Công cụ chính để điều khiển Kubernetes.
 
-**Mục đích:** Tự động cấp phát và gia hạn chứng chỉ TLS.
+```bash
+# Linux:
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+chmod +x kubectl
+sudo mv kubectl /usr/local/bin/
 
-**Cài đặt:** Helm chart từ jetstack repo.
-
-**Tài nguyên được tạo:**
-- `ClusterIssuer` (Let's Encrypt production)
-- `Certificate` cho mỗi ingress (tự gia hạn 30 ngày trước hết hạn)
-
-**Annotations Ingress sử dụng:**
-```yaml
-cert-manager.io/cluster-issuer: letsencrypt-prod
-kubernetes.io/tls-acme: "true"
+# macOS: brew install kubectl
 ```
 
-**Luồng:** cert-manager → ACME challenge (HTTP-01 / DNS-01) → Let's Encrypt → Secret (tls) → Ingress
+### 5. Helm
 
-### 2.3 CoreDNS
+Trình quản lý gói cho Kubernetes (giúp cài đặt phần mềm phức tạp dễ dàng hơn).
 
-**Mục đích:** Phân giải DNS nội bộ cho Services (được tích hợp sẵn trong cluster).
+```bash
+# Linux:
+curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+chmod +x get_helm.sh
+./get_helm.sh
 
-**Cấu hình:**
-- Domain: `cluster.local`
-- Forward truy vấn ngoài đến VPC DNS resolver
-- Tự động scale theo kích thước cluster
-
----
-
-## 3. Tầng Lưu trữ
-
-**Vai trò:** Cung cấp persistent volume động với hiệu năng và mã hoá phù hợp.
-
-**Thành phần:**
-1. **CSI Driver** (EBS CSI / EFS CSI / Rook-Ceph)
-2. **StorageClass** definitions
-3. **VolumeSnapshotClass** (cho backup)
-
-### 3.1 Cấu hình StorageClass
-
-```yaml
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: gp3
-provisioner: ebs.csi.aws.com
-volumeBindingMode: WaitForFirstConsumer  # schedule pod trước, cấp PV trong cùng AZ
-parameters:
-  type: gp3
-  encrypted: "true"
-  iops: "3000"
-  throughput: "125"
-reclaimPolicy: Delete
-allowVolumeExpansion: true
+# macOS: brew install helm
 ```
 
-**Sử dụng:**
-- **Stateful workloads** (MySQL, Redis): `storageClassName: gp3` với `ReadWriteOnce`
-- **File chia sẻ** (upload CMS, logs): EFS CSI với `ReadWriteMany`
-- **Dữ liệu tạm** (CI artifacts): `ephemeral` volumes hoặc `EmptyDir`
+### 6. kustomize
 
----
+Công cụ tùy chỉnh cấu hình Kubernetes (tích hợp sẵn trong kubectl).
 
-## 4. Tầng Dữ liệu
-
-**Vai trò:** Chạy workloads có trạng thái với tính sẵn sàng cao và dữ liệu bền vững.
-
-### 4.1 MySQL StatefulSet
-
-**Mục đích:** Cơ sở dữ liệu quan hệ cho ứng dụng.
-
-**Kiến trúc:**
-- 3 pods: 1 Primary (read/write) + 2 Replicas (read-only)
-- Headless Service cho DNS ổn định
-- Mỗi pod có PVC riêng (10Gi gp3)
-- Semi-sync replication
-
-**Tinh chỉnh (ConfigMap):**
-```ini
-[mysqld]
-innodb_buffer_pool_size = 70% RAM
-innodb_log_file_size = 512M
-max_connections = 200
-character-set-server = utf8mb4
-collation-server = utf8mb4_unicode_ci
-```
-
-**Luồng:**
-```
-App → mysql-svc:3306 → Primary (write) → PVC
-                      → Replicas (read) → PVC
-```
-
-### 4.2 Redis (Tuỳ chọn)
-
-**Mục đích:** Cache, session store, rate limiting.
-
-**Kiến trúc:**
-- 3-pod Redis Sentinel (hoặc Redis Cluster cho HA)
-- Headless Service
-- PVC gp3 nhỏ (1Gi)
-- Bật AOF persistence
-
-### 4.3 External Database Service
-
-**Mục đích:** Kết nối managed database (RDS, Cloud SQL, v.v.) thay vì MySQL trong cluster.
-
-**Cấu hình:**
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: mysql-external
-spec:
-  type: ExternalName
-  externalName: myapp.xxxxxxxxxxxx.region.rds.amazonaws.com
+```bash
+kubectl kustomize --help   # Kiểm tra
 ```
 
 ---
 
-## 5. Tầng Ứng dụng
+## Bước 1: Tải dự án về
 
-**Vai trò:** Chạy ứng dụng thực tế với cấu hình, scaling, và quản lý health đúng chuẩn.
-
-### 5.1 Namespace
-
-```yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: myapp
-```
-
-### 5.2 ConfigMap / Secret
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: myapp-config
-  namespace: myapp
-data:
-  APP_ENV: production
-  APP_DEBUG: "false"
-  DB_HOST: mysql-svc
-  DB_PORT: "3306"
-  DB_NAME: myapp
----
-# Secrets được lưu dưới dạng SealedSecret
-apiVersion: bitnami.com/v1alpha1
-kind: SealedSecret
-metadata:
-  name: myapp-secrets
-  namespace: myapp
-spec:
-  encryptedData:
-    DB_PASSWORD: <mã-hoá-bằng-kubeseal>
-```
-
-### 5.3 Deployment
-
-**Cấu hình chính:**
-- **Resource requests/limits** - QoS class, tránh thiếu tài nguyên
-- **Readiness + Liveness probes** - Định tuyến traffic + tự phục hồi
-- **Pod Anti-Affinity** - Trải pod khắp các node/AZ
-- **Topology Spread Constraints** - Phân phối đều
-- **Pod Disruption Budget** - Đảm bảo số pod tối thiểu
-- **Graceful shutdown** - `preStop` hook + `terminationGracePeriodSeconds`
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: myapp
-  namespace: myapp
-spec:
-  replicas: 3
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 1
-      maxSurge: 1
-  template:
-    spec:
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            podAffinityTerm:
-              labelSelector:
-                matchLabels:
-                  app: myapp
-              topologyKey: topology.kubernetes.io/zone
-      containers:
-      - name: app
-        resources:
-          requests:
-            cpu: 250m
-            memory: 256Mi
-          limits:
-            cpu: 500m
-            memory: 512Mi
-        livenessProbe:
-          httpGet:
-            path: /healthz
-            port: 8080
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /ready
-            port: 8080
-          initialDelaySeconds: 5
-          periodSeconds: 5
-```
-
-### 5.4 Service & Ingress
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: myapp-svc
-  namespace: myapp
-spec:
-  type: ClusterIP
-  ports:
-  - port: 80
-    targetPort: 8080
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: myapp-ingress
-  namespace: myapp
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-spec:
-  ingressClassName: nginx
-  tls:
-  - hosts:
-    - myapp.example.com
-    secretName: myapp-tls
-  rules:
-  - host: myapp.example.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: myapp-svc
-            port:
-              number: 80
-```
-
-### 5.5 HPA (Horizontal Pod Autoscaler)
-
-```yaml
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: myapp-hpa
-  namespace: myapp
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: myapp
-  minReplicas: 3
-  maxReplicas: 20
-  metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 75
-  - type: Resource
-    resource:
-      name: memory
-      target:
-        type: Utilization
-        averageUtilization: 80
+```bash
+git clone https://github.com/nathanpixodeo/k8s-production-stack.git
+cd k8s-production-stack
 ```
 
 ---
 
-## 6. Tầng Bảo mật
+## Bước 2: Tạo Kubernetes Cluster
 
-**Vai trò:** Thiết lập ranh giới bảo mật, truy cập tối thiểu, và quản lý secret.
+Đây là bước quan trọng nhất — tạo máy chủ trên AWS.
 
-### 6.1 Network Policies
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: default-deny-all
-  namespace: myapp
-spec:
-  podSelector: {}
-  policyTypes:
-  - Ingress
-  - Egress
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-ingress-controller
-  namespace: myapp
-spec:
-  podSelector:
-    matchLabels:
-      app: myapp
-  ingress:
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: ingress-nginx
-    ports:
-    - port: 8080
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-egress-mysql
-  namespace: myapp
-spec:
-  podSelector:
-    matchLabels:
-      app: myapp
-  egress:
-  - to:
-    - podSelector:
-        matchLabels:
-          app: mysql
-    ports:
-    - port: 3306
-  - to:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: kube-system
-    ports:
-    - port: 53
+```bash
+eksctl create cluster -f clusters/eksctl-cluster.yaml
 ```
 
-### 6.2 RBAC
+**Việc này mất 15-25 phút.** Nó tạo ra:
+- Một mạng riêng (VPC) với các subnet public/private
+- Kubernetes control plane ("bộ não" của cluster)
+- 2 máy chủ EC2 (gọi là nodes)
+- Cấu hình mạng để mọi thứ kết nối được với nhau
 
-```yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: myapp-sa
-  namespace: myapp
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  namespace: myapp
-  name: myapp-role
-rules:
-- apiGroups: [""]
-  resources: ["configmaps", "secrets"]
-  verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: myapp-binding
-  namespace: myapp
-subjects:
-- kind: ServiceAccount
-  name: myapp-sa
-  namespace: myapp
-roleRef:
-  kind: Role
-  name: myapp-role
-  apiGroup: rbac.authorization.k8s.io
-```
-
-### 6.3 Sealed Secrets
-
-**Mục đích:** Mã hoá Kubernetes Secrets để lưu an toàn trong git.
-
-**Quy trình:**
-1. Developer tạo Secret yaml
-2. Chạy `kubeseal` → tạo SealedSecret (đã mã hoá, an toàn cho git)
-3. Commit SealedSecret lên repo
-4. ArgoCD apply SealedSecret → controller giải mã → tạo Secret thường
-
----
-
-## 7. Tầng Giám sát
-
-**Vai trò:** Cung cấp khả năng quan sát sức khoẻ cluster, metrics ứng dụng, và logs.
-
-### 7.1 Prometheus + Grafana
-
-**Cài đặt:** kube-prometheus-stack Helm chart.
-
-**Thành phần:**
-- **Prometheus** - Lưu metrics, đánh giá alert
-- **Grafana** - Dashboard + UI cảnh báo
-- **AlertManager** - Định tuyến cảnh báo (Slack, PagerDuty, email)
-- **kube-state-metrics** - Metrics object cluster
-- **node-exporter** - Metrics node (CPU, memory, disk, network)
-
-**Giám sát ứng dụng:**
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: myapp-monitor
-  namespace: myapp
-spec:
-  selector:
-    matchLabels:
-      app: myapp
-  endpoints:
-  - port: metrics
-    interval: 15s
-    path: /metrics
-```
-
-### 7.2 Loki (Logging)
-
-**Cài đặt:** Loki Helm chart với Grafana datasource.
-
-**Thành phần:**
-- **Loki** - Tổng hợp log (giống Prometheus nhưng cho log)
-- **Promtail** - DaemonSet, thu thập log từ `/var/log/pods/*`
-- **Grafana** - Giao diện tra cứu log
-
----
-
-## 8. Tầng Backup (Velero)
-
-**Vai trò:** Sao lưu và phục hồi tài nguyên Kubernetes và persistent volumes.
-
-**Cài đặt:** Velero Helm chart với AWS S3 plugin.
-
-**Cấu hình:**
-```yaml
-configuration:
-  backupStorageLocation:
-  - name: default
-    provider: aws
-    bucket: myapp-velero-backups
-    config:
-      region: ca-central-1
-  volumeSnapshotLocation:
-  - name: default
-    provider: aws
-    config:
-      region: ca-central-1
-schedules:
-  daily-backup:
-    schedule: "0 2 * * *"
-    template:
-      ttl: 720h   # 30 ngày
-      includedNamespaces:
-      - myapp
+**Kiểm tra:**
+```bash
+kubectl get nodes
+# Bạn sẽ thấy danh sách các máy chủ với trạng thái "Ready"
 ```
 
 ---
 
-## 9. Tầng GitOps (ArgoCD)
+## Bước 3: Cấu hình ổ cứng (Storage)
 
-**Vai trò:** Triển khai ứng dụng theo khai báo, phiên bản hoá, đồng bộ tự động và tự phục hồi.
+```bash
+kubectl apply -k storage/
+```
 
-**Cài đặt:** ArgoCD Helm chart với HA configuration.
+**Tạo ra:**
+- **StorageClass `gp3`**: Loại ổ SSD nhanh
+- **VolumeSnapshotClass**: Cho phép chụp snapshot dữ liệu
 
-**Tính năng chính:**
-- **Auto-sync** - Tự động áp dụng thay đổi từ git
-- **Self-heal** - Hoàn tác thay đổi thủ công để khớp git
-- **Prune** - Xoá tài nguyên đã bị xoá khỏi git
-- **ApplicationSet** - Tạo app theo môi trường/cluster
-- **Sync waves** - Thứ tự tạo tài nguyên (CRDs trước, workloads sau)
-
-**Ví dụ ApplicationSet:**
-```yaml
-apiVersion: argoproj.io/v1alpha1
-kind: ApplicationSet
-metadata:
-  name: myapp
-spec:
-  generators:
-  - list:
-      elements:
-      - env: staging
-        cluster: https://staging-cluster:6443
-      - env: production
-        cluster: https://production-cluster:6443
-  template:
-    metadata:
-      name: '{{env}}-myapp'
-    spec:
-      project: default
-      source:
-        repoURL: https://github.com/org/myapp.git
-        targetRevision: HEAD
-        path: 'kustomize/overlays/{{env}}'
-      destination:
-        server: '{{cluster}}'
-        namespace: myapp-{{env}}
-      syncPolicy:
-        automated:
-          prune: true
-          selfHeal: true
-        syncOptions:
-        - CreateNamespace=true
+**Kiểm tra:**
+```bash
+kubectl get storageclass
 ```
 
 ---
 
-## Thứ tự triển khai
+## Bước 4: Cài đặt hệ thống mạng (Cửa chính)
 
-```
-1. Cluster + VPC (eksctl / kubeadm)
-2. StorageClass (CSI driver)
-3. Ingress-NGINX + cert-manager
-4. Giám sát (Prometheus, Grafana, Loki)
-5. Bảo mật (Sealed Secrets, NetworkPolicies, RBAC)
-6. Tầng Dữ liệu (MySQL, Redis)
-7. Ứng dụng (Namespace, ConfigMap, Deployment, Service, Ingress, HPA)
-8. Backup (Velero)
-9. GitOps (ArgoCD)
+```bash
+kubectl apply -k networking/
 ```
 
-## Luồng deploy zero-downtime
+**Tạo ra:**
 
-```
-1. HPA scale lên replica mới
-2. RollingUpdate tạo pod mới
-3. Readiness probe thành công → pod mới vào Service
-4. Pod cũ tiếp tục phục vụ đến khi pod mới Ready
-5. Pod cũ nhận SIGTERM → preStop hook drain connections
-6. Pod cũ kết thúc
-7. Lặp lại đến khi tất cả pod được thay thế
+### Ingress-NGINX (Cửa chính)
+- Một bộ định tuyến thông minh đặt trước cluster
+- Một AWS Network Load Balancer (NLB)
+- Tất cả traffic từ Internet đều vào qua đây
+
+### cert-manager (Người làm chìa khoá tự động)
+- Tự động lấy chứng chỉ HTTPS miễn phí từ Let's Encrypt
+- Tự động gia hạn trước khi hết hạn
+
+**Kiểm tra:**
+```bash
+kubectl get pods -n ingress-nginx
+kubectl get pods -n cert-manager
 ```
 
-## Luồng phục hồi thảm hoạ
+---
 
+## Bước 5: Cài đặt giám sát (Dashboard)
+
+```bash
+kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -k monitoring/
 ```
-1. velero backup create --include-namespaces myapp --ttl 720h
-2. (Thảm hoạ xảy ra)
-3. Deploy cluster mới (eksctl)
-4. velero restore create --from-backup <tên-backup>
-5. Phục hồi gồm: PVs (snapshots), Deployments, Services, Ingresses, ConfigMaps, Secrets
-6. Kiểm tra ứng dụng
-7. Cập nhật DNS đến Ingress LB mới
+
+**Tạo ra: Prometheus, Grafana, Loki, AlertManager**
+
+**Mở Grafana:**
+```bash
+kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80
+# Mở http://localhost:3000 trên trình duyệt
 ```
+
+---
+
+## Bước 6: Cài đặt bảo mật (Tường lửa + Kiểm soát)
+
+```bash
+kubectl apply -k security/
+```
+
+**Tạo ra:**
+- **Network Policies**: Tường lửa — mặc định chặn hết, chỉ mở khi cần
+- **RBAC**: Phân quyền — ServiceAccount, Role, RoleBinding
+- **Sealed Secrets**: Mã hoá secrets để lưu an toàn trong Git
+
+---
+
+## Bước 7: Cài đặt Database
+
+Chọn engine database:
+
+```bash
+# MySQL (mặc định):
+kubectl apply -k database/
+
+# PostgreSQL (dùng cho fullstack):
+# Sửa database/kustomization.yaml, sau đó:
+# kubectl apply -k database/postgresql/
+```
+
+**Tạo ra:**
+- 3 bản sao database (1 chính + 2 phụ)
+- Mỗi bản có 10GB ổ SSD riêng
+- Service `database-svc` (ghi) và `database-svc-read` (đọc)
+
+**Kiểm tra:**
+```bash
+kubectl get pods -n myapp -w
+kubectl get svc -n myapp
+```
+
+---
+
+## Bước 8: Triển khai ứng dụng
+
+### Option A: Ứng dụng đơn giản
+```bash
+kubectl apply -k application/
+```
+
+### Option B: Laravel API
+```bash
+kubectl apply -k frameworks/laravel/
+```
+
+### Option C: React Frontend
+```bash
+kubectl apply -k frameworks/react/
+```
+
+### Option D: Fullstack (Laravel + React + PostgreSQL) — Khuyến nghị
+```bash
+kubectl apply -k database/postgresql/
+kubectl apply -k frameworks/fullstack/
+```
+
+---
+
+## Bước 9: Cài đặt sao lưu
+
+```bash
+kubectl apply -k backup/
+```
+
+Cài **Velero** — công cụ backup tự động lên AWS S3.
+
+---
+
+## Bước 10: Cài đặt GitOps
+
+```bash
+kubectl apply -k gitops/
+```
+
+Cài **ArgoCD** — tự động đồng bộ từ Git lên cluster.
+
+---
+
+## Các lệnh thường dùng
+
+| Mục đích | Câu lệnh |
+|----------|----------|
+| Xem tất cả pods | `kubectl get pods -A` |
+| Xem log ứng dụng | `kubectl logs -n myapp -l app=laravel` |
+| Xem log theo thời gian thực | `kubectl logs -n myapp -l app=laravel -f` |
+| Chạy lệnh trong pod | `kubectl exec -n myapp deploy/laravel -- php artisan list` |
+| Xem services | `kubectl get svc -A` |
+| Xem ingress | `kubectl get ingress -A` |
+| Restart deployment | `kubectl rollout restart deployment laravel -n myapp` |
+| Mở shell trong pod | `kubectl exec -n myapp -it deploy/laravel -- /bin/sh` |
+| Xem tài nguyên | `kubectl top pods -n myapp` |
+
+---
+
+## Xoá toàn bộ
+
+```bash
+# CẢNH BÁO: Xoá VĨNH VIỄN, kể cả database
+./scripts/destroy.sh
+```
+
+## Thuật ngữ cơ bản
+
+| Thuật ngữ | Ý nghĩa | Ví dụ |
+|-----------|---------|-------|
+| **Cluster** | Toàn bộ hệ thống Kubernetes | Toà nhà nhà hàng |
+| **Node** | Một máy chủ trong cluster | Một căn bếp |
+| **Pod** | Đơn vị nhỏ nhất — chứa container | Một đầu bếp |
+| **Deployment** | Quản lý nhóm pod giống hệt nhau | Bếp trưởng |
+| **Service** | Điểm kết nối ổn định cho pods | Phục vụ bàn |
+| **Ingress** | Cửa vào cho traffic từ Internet | Cửa chính |
+| **Namespace** | Cách tổ chức tài nguyên (như thư mục) | Khu vực nhà hàng |
+| **ConfigMap** | Lưu cấu hình (không bí mật) | Thẻ công thức |
+| **Secret** | Lưu dữ liệu nhạy cảm (mật khẩu) | Két sắt |
+| **PVC** | Yêu cầu lưu trữ | Đặt mua kệ mới |
+| **StatefulSet** | Giống Deployment nhưng danh tính ổn định | Chỗ ngồi cố định |
+| **HPA** | Tự động mở rộng | Thuê thêm người khi đông |
+| **NetworkPolicy** | Tường lửa | Khoá cửa |

@@ -6,10 +6,14 @@ Deploy production-grade applications on Kubernetes with a layered architecture, 
 
 ## Documentation
 
+> 🆕 **New to Kubernetes?** Start here:
+> - 🇬🇧 [Zero-to-K8s Guide](docs/en/stack-flow.md) — complete walkthrough for beginners
+> - 🇻🇳 [Hướng dẫn từ số 0](docs/vi/stack-flow.md) — hướng dẫn chi tiết cho người mới
+
 | Language | |
 |----------|-|
-| 🇻🇳 Tiếng Việt | [Kiến trúc](docs/vi/architecture.md) · [Chi tiết các tầng](docs/vi/stack-flow.md) |
-| 🇬🇧 English | [Architecture](docs/en/architecture.md) · [Stack Flow](docs/en/stack-flow.md) |
+| 🇻🇳 Tiếng Việt | [Kiến trúc](docs/vi/architecture.md) · [Từ số 0](docs/vi/stack-flow.md) · [Thuật ngữ](docs/vi/glossary.md) |
+| 🇬🇧 English | [Architecture](docs/en/architecture.md) · [Zero-to-K8s](docs/en/stack-flow.md) · [Glossary](docs/en/glossary.md) |
 
 ## Architecture
 
