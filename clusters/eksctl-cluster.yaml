@@ -1,0 +1,115 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: production-cluster
+  region: ca-central-1
+  version: "1.31"
+
+vpc:
+  cidr: 10.0.0.0/16
+  nat:
+    gateway: HighlyAvailable
+
+cloudWatch:
+  clusterLogging:
+    enableTypes:
+      - api
+      - audit
+      - authenticator
+      - controllerManager
+      - scheduler
+
+iam:
+  withOIDC: true
+  serviceAccounts:
+    - metadata:
+        name: aws-load-balancer-controller
+        namespace: kube-system
+      wellKnownPolicies:
+        awsLoadBalancerController: true
+    - metadata:
+        name: ebs-csi-controller-sa
+        namespace: kube-system
+      wellKnownPolicies:
+        ebsCSIController: true
+    - metadata:
+        name: efs-csi-controller-sa
+        namespace: kube-system
+      wellKnownPolicies:
+        efsCSIController: true
+    - metadata:
+        name: cert-manager
+        namespace: cert-manager
+      wellKnownPolicies:
+        certManager: true
+    - metadata:
+        name: external-dns
+        namespace: kube-system
+      wellKnownPolicies:
+        externalDNS: true
+
+managedNodeGroups:
+  - name: on-demand
+    instanceTypes:
+      - t3.medium
+      - t3.large
+      - m6i.large
+    minSize: 2
+    maxSize: 10
+    desiredSize: 2
+    availabilityZones:
+      - ca-central-1a
+      - ca-central-1b
+    privateNetworking: true
+    volumeSize: 50
+    volumeType: gp3
+    ssh:
+      allow: false
+    labels:
+      node-type: on-demand
+      workload: critical
+    tags:
+      k8s.io/cluster-autoscaler/enabled: "true"
+      k8s.io/cluster-autoscaler/production-cluster: "owned"
+
+  - name: spot
+    instanceTypes:
+      - t3.medium
+      - t3.large
+      - m6i.large
+      - c6i.large
+    spot: true
+    minSize: 0
+    maxSize: 20
+    desiredSize: 0
+    availabilityZones:
+      - ca-central-1a
+      - ca-central-1b
+    privateNetworking: true
+    volumeSize: 50
+    volumeType: gp3
+    labels:
+      node-type: spot
+      workload: stateless
+    taints:
+      - key: spot
+        value: "true"
+        effect: PreferNoSchedule
+    tags:
+      k8s.io/cluster-autoscaler/enabled: "true"
+      k8s.io/cluster-autoscaler/production-cluster: "owned"
+
+addons:
+  - name: vpc-cni
+    version: latest
+    resolveConflicts: overwrite
+  - name: coredns
+    version: latest
+    resolveConflicts: overwrite
+  - name: kube-proxy
+    version: latest
+  - name: aws-ebs-csi-driver
+    version: latest
+    resolveConflicts: overwrite
+    serviceAccountRoleARN: ""  # created via IAM above

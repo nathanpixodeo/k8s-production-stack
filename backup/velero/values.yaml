@@ -1,0 +1,76 @@
+initContainers:
+  - name: velero-plugin-for-aws
+    image: velero/velero-plugin-for-aws:v1.10.0
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+    - mountPath: /target
+      name: plugins
+
+configuration:
+  backupStorageLocation:
+  - name: default
+    provider: aws
+    bucket: myapp-velero-backups
+    config:
+      region: ca-central-1
+  volumeSnapshotLocation:
+  - name: default
+    provider: aws
+    config:
+      region: ca-central-1
+  features: EnableCSI
+
+credentials:
+  secretContents:
+    cloud: |
+      [default]
+      aws_access_key_id=YOUR_ACCESS_KEY
+      aws_secret_access_key=YOUR_SECRET_KEY
+
+schedules:
+  daily-backup:
+    schedule: "0 2 * * *"
+    template:
+      ttl: 720h
+      includedNamespaces:
+      - myapp
+      includedResources:
+      - deployments
+      - statefulsets
+      - configmaps
+      - secrets
+      - services
+      - ingresses
+      - pvcs
+      - persistentvolumeclaims
+      snapshotVolumes: true
+      storageLocation: default
+      volumeSnapshotLocations:
+      - default
+  monthly-backup:
+    schedule: "0 3 1 * *"
+    template:
+      ttl: 2160h
+      includedNamespaces:
+      - myapp
+      snapshotVolumes: true
+
+nodeSelector:
+  kubernetes.io/os: linux
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+podVolumeRestore:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi

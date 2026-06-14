@@ -1,0 +1,52 @@
+loki:
+  enabled: true
+  isDefault: false
+  auth_enabled: false
+  persistence:
+    enabled: true
+    storageClassName: gp3
+    size: 20Gi
+  config:
+    table_manager:
+      retention_deletes_enabled: true
+      retention_period: 720h
+    storage_config:
+      boltdb_shipper:
+        active_index_directory: /data/loki/index
+        cache_location: /data/loki/index_cache
+        shared_store: filesystem
+    schema_config:
+      configs:
+      - from: 2024-01-01
+        store: boltdb-shipper
+        object_store: filesystem
+        schema: v11
+        index:
+          prefix: index_
+          period: 24h
+
+promtail:
+  enabled: true
+  config:
+    clients:
+    - url: http://loki:3100/loki/api/v1/push
+      backoff_config:
+        min_period: 100ms
+        max_period: 5s
+    snippets:
+      scrapeConfigs: |
+        - job_name: kubernetes-pods
+          pipeline_stages:
+          - cri: {}
+          kubernetes_sd_configs:
+          - role: pod
+          relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __path__
+            regex: (.+)
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: app

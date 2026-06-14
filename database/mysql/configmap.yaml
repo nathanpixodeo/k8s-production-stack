@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-config
+  namespace: myapp
+  labels:
+    app: mysql
+data:
+  my.cnf: |
+    [mysqld]
+    server-id=1
+    log_bin=mysql-bin
+    binlog_format=ROW
+    expire_logs_days=7
+    max_binlog_size=100M
+    innodb_buffer_pool_size=2G
+    innodb_log_file_size=512M
+    innodb_flush_log_at_trx_commit=1
+    innodb_flush_method=O_DIRECT
+    max_connections=200
+    character-set-server=utf8mb4
+    collation-server=utf8mb4_unicode_ci
+    skip-character-set-client-handshake
+    performance_schema=ON
+    slow_query_log=ON
+    long_query_time=2
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-initdb
+  namespace: myapp
+  labels:
+    app: mysql
+data:
+  init.sql: |
+    CREATE DATABASE IF NOT EXISTS myapp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    CREATE USER IF NOT EXISTS 'myapp'@'%' IDENTIFIED BY '${MYSQL_PASSWORD}';
+    GRANT ALL PRIVILEGES ON myapp.* TO 'myapp'@'%';
+    FLUSH PRIVILEGES;

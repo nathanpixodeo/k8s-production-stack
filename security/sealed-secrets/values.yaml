@@ -1,0 +1,25 @@
+image:
+  repository: bitnami/sealed-secrets-controller
+  tag: v0.27.0
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+serviceMonitor:
+  enabled: true
+  namespace: monitoring
+
+networkPolicy:
+  enabled: true
