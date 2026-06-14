@@ -22,7 +22,7 @@ The stack provisions the following Kubernetes layers:
 | **Storage** | CSI Drivers, StorageClass | gp3 encrypted volumes, dynamic provisioning, snapshots |
 | **Data** | MySQL / MariaDB / PostgreSQL | Swappable engines via kustomize, 3-replica StatefulSet |
 | **Application** | Deployments, Services, Ingresses, HPAs | Resource limits, probes, anti-affinity, auto-scaling |
-| **Framework** | Laravel (PHP-FPM + Nginx + Horizon) | Queue workers, scheduler, framework-optimised config |
+| **Framework** | Laravel / React / Fullstack | PHP-FPM, Nginx SPA, combined API+FE ingress |
 | **Security** | Network Policies, RBAC, Sealed Secrets | Default-deny, least privilege, encrypted secrets in git |
 | **Monitoring** | Prometheus, Grafana, Loki, AlertManager | Metrics, logs, alerts (Slack/PagerDuty) |
 | **Backup** | Velero | Daily/monthly PV + resource backups to S3 |
@@ -53,6 +53,8 @@ k8s-production-stack/
 │   └── pdb.yaml               # Pod Disruption Budget
 ├── frameworks/                # Framework-specific overlays
 │   ├── laravel/               # Laravel: PHP-FPM + Nginx + Horizon + Scheduler
+│   ├── react/                 # React: Nginx static SPA
+│   ├── fullstack/             # Laravel API + React FE + PostgreSQL
 │   └── README.md              # Framework usage docs
 ├── security/                  # Security controls
 │   ├── network-policies.yaml  # Default-deny + selective allow
@@ -115,7 +117,9 @@ kubectl apply -k database/     # default: MySQL
 
 # 8. Deploy Application (choose one):
 kubectl apply -k application/                      # generic app
-kubectl apply -k frameworks/laravel/               # Laravel (PHP-FPM + Nginx + Horizon)
+kubectl apply -k frameworks/laravel/               # Laravel API (PHP + MySQL)
+kubectl apply -k frameworks/react/                 # React SPA frontend
+kubectl apply -k frameworks/fullstack/             # Laravel API + React FE + PostgreSQL
 
 # 9. Install Backup (Velero)
 kubectl apply -k backup/

@@ -1,0 +1,66 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fullstack-ingress
+  namespace: myapp
+  labels:
+    app: fullstack
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - myapp.example.com
+    secretName: myapp-tls
+  rules:
+  - host: myapp.example.com
+    http:
+      paths:
+      - path: /api/?(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: laravel-svc
+            port:
+              number: 80
+      - path: /storage/?(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: laravel-svc
+            port:
+              number: 80
+      - path: /broadcasting/?(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: laravel-svc
+            port:
+              number: 80
+      - path: /telescope/?(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: laravel-svc
+            port:
+              number: 80
+      - path: /horizon/?(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: laravel-svc
+            port:
+              number: 80
+      - path: /(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: react-svc
+            port:
+              number: 80

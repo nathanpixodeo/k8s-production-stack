@@ -1,0 +1,12 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: react-pdb
+  namespace: myapp
+  labels:
+    app: react
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: react

@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fullstack-env
+  namespace: myapp
+  labels:
+    app: fullstack
+data:
+  APP_ENV: production
+  APP_DEBUG: "false"
+  LOG_LEVEL: info
+  LOG_CHANNEL: stderr
+  DB_CONNECTION: pgsql
+  DB_HOST: database-svc
+  DB_PORT: "5432"
+  DB_DATABASE: myapp
+  DB_USERNAME: myapp
+  REDIS_HOST: redis-svc
+  REDIS_PORT: "6379"
+  SESSION_DRIVER: redis
+  CACHE_DRIVER: redis
+  QUEUE_CONNECTION: redis
+  FILESYSTEM_DISK: s3
+  BROADCAST_DRIVER: log
+  SANCTUM_STATEFUL_DOMAINS: myapp.example.com
+  SESSION_DOMAIN: .myapp.example.com
+  FRONTEND_URL: https://myapp.example.com

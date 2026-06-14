@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: react-nginx
+  namespace: myapp
+  labels:
+    app: react
+data:
+  default.conf: |
+    server {
+        listen 8080;
+        server_name _;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        gzip on;
+        gzip_types text/css application/javascript application/json image/svg+xml;
+        gzip_comp_level 6;
+
+        location / {
+            try_files $uri $uri/ /index.html;
+            add_header Cache-Control "public, max-age=3600";
+        }
+
+        location /static/ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+
+        location /assets/ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+
+        location = /service-worker.js {
+            expires 0;
+            add_header Cache-Control "no-cache";
+        }
+
+        location /healthz {
+            return 200 "healthy\n";
+            add_header Content-Type text/plain;
+        }
+    }

@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: myapp
+
+resources:
+  - ../../application/namespace.yaml
+  - ../../database/postgresql/
+  - ../laravel/service.yaml
+  - ../laravel/hpa.yaml
+  - ../laravel/pdb.yaml
+  - ../laravel/deployment.yaml
+  - ../laravel/horizon.yaml
+  - ../laravel/scheduler.yaml
+  - ../react/service.yaml
+  - ../react/hpa.yaml
+  - ../react/pdb.yaml
+  - ../react/deployment.yaml
+  - env-configmap.yaml
+  - ingress.yaml
+  - network-policies.yaml
+
+secretGenerator:
+  - name: laravel-secrets
+    type: Opaque
+    literals:
+      - APP_KEY=base64:changeme-laravel-app-key-32-chars
+      - DB_PASSWORD=changeme-db-password
+      - REDIS_PASSWORD=null
+  - name: postgresql-secret
+    type: Opaque
+    literals:
+      - USER_PASSWORD=changeme-db-password
+
+generatorOptions:
+  disableNameSuffixHash: true
